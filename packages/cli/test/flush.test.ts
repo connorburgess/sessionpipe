@@ -2,7 +2,7 @@
 // The drain packs events from many sessions into one batch and moves every
 // cursor only after the batch was acknowledged; a sink that refused waits as
 // HTTP.md §2 says, for every worker; one worker drains at a time.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -49,6 +49,80 @@ describe("flush", () => {
     const d = await flush(tmp, [{ name: "z", url: `file:${file}`, tier: 0 }], outbox);
     expect(d.z).toBe(0);
     expect(new Cursors(tmp, "z").read()["codex/t"]).toBeGreaterThan(0);
+  });
+  it("a 413 halves the batch and reads again; the whole backlog still arrives, in order", async () => {
+    const posts: number[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => {
+        body += d;
+      });
+      req.on("end", () => {
+        const n = (JSON.parse(body) as { events: unknown[] }).events.length;
+        posts.push(n);
+        // A receiver that takes at most 3 events a batch.
+        if (n > 3)
+          res.writeHead(413, { "content-type": "application/json" }).end(JSON.stringify({ reason: "batch_too_large" }));
+        else res.writeHead(202, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const outbox = new Outbox(tmp);
+      outbox.append(
+        { harness: "codex", session: "big" },
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => ev("big", i)),
+      );
+      outbox.append({ harness: "codex", session: "next" }, [ev("next", 0)]);
+      const d = await flush(tmp, [{ name: "h", url, tier: 3, token: "t" }], outbox);
+      expect(d.h).toBe(11);
+      // 11 → 413, 5 → 413, then batches of 2 until the backlog is gone.
+      expect(posts.slice(0, 2)).toEqual([11, 5]);
+      expect(posts.slice(2).every((n) => n <= 2)).toBe(true);
+      expect(posts.slice(2).reduce((a, b) => a + b, 0)).toBe(11);
+      const c = new Cursors(tmp, "h").read();
+      expect(c["codex/big"]).toBe(statSync(outbox.file({ harness: "codex", session: "big" })).size);
+      expect(c["codex/next"]).toBe(statSync(outbox.file({ harness: "codex", session: "next" })).size);
+      expect((await flush(tmp, [{ name: "h", url, tier: 3, token: "t" }], outbox)).h).toBe(0);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+  it("one event the receiver won't take is dropped and logged, and the ones behind it arrive", async () => {
+    const got: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => {
+        body += d;
+      });
+      req.on("end", () => {
+        if (body.length > 20_000) {
+          res.writeHead(413, { "content-type": "application/json" }).end(JSON.stringify({ reason: "batch_too_large" }));
+          return;
+        }
+        for (const e of (JSON.parse(body) as { events: { id: string }[] }).events) got.push(e.id);
+        res.writeHead(202, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const outbox = new Outbox(tmp);
+      const base = ev("w", 1, "tool.ended");
+      const huge = { ...base, data: { ...base.data, output: "x".repeat(60_000) } };
+      const events = [ev("w", 0), huge, ev("w", 2)];
+      outbox.append({ harness: "codex", session: "w" }, events);
+      const d = await flush(tmp, [{ name: "h", url, tier: 3, token: "t" }], outbox);
+      expect(got).toEqual([events[0]?.id, events[2]?.id]);
+      expect(d.h).toBe(3);
+      expect(readFileSync(path.join(tmp, "log"), "utf8")).toContain("larger than the receiver takes, dropped");
+      expect(new Cursors(tmp, "h").read()["codex/w"]).toBe(
+        statSync(outbox.file({ harness: "codex", session: "w" })).size,
+      );
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
   it("sinks drain at once: two slow receivers are in flight together", async () => {
     let inflight = 0;

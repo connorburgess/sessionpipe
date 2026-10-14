@@ -502,7 +502,11 @@ const MAX_PER_RUN = 500;
  *  only after its batch was acknowledged; a refused batch stops the sink for this
  *  run and the next worker starts from the same cursors. The sinks drain at once:
  *  the session's lock is held for the slowest round trip, not the sum of them (a
- *  verdict's config write is synchronous, so two sinks' never interleave). */
+ *  verdict's config write is synchronous, so two sinks' never interleave).
+ *  A 413 (HTTP.md §2) halves the batch and reads again from the same cursors; a
+ *  single event the receiver won't take is dropped, logged, and passed. Until
+ *  2026-10-14 a 413 stalled the sink: the next worker built the same batch from the
+ *  same cursor and got the same answer, so every session behind it never arrived. */
 export async function flush(
   state: string,
   sinkConfigs: SinkConfig[],
@@ -529,11 +533,15 @@ export async function flush(
     const c = cursors.read();
     let sent = 0;
     let stalled = false;
+    // How many events a batch holds: BATCH, halved on each 413 for the rest of this run.
+    let cap = BATCH;
     // Pull filtered events session by session into one batch; remember where each
     // session's offset would land if the batch goes through.
     let batch: Event[] = [];
     let pending: Record<string, number> = {};
-    const send = async (): Promise<boolean> => {
+    /** true: sent (or dropped) and the cursors moved; false: the sink stalled;
+     *  "again": the batch was too large, read again from the cursors with a smaller cap. */
+    const send = async (): Promise<boolean | "again"> => {
       if (!batch.length) {
         Object.assign(c, pending);
         pending = {};
@@ -550,7 +558,19 @@ export async function flush(
         }
         log(state, `sink ${sink.name}: ${res.status ?? ""} ${res.error ?? ""} → ${action}${wait}`);
         if (res.action === "pause" || res.action === "lower-tier") applySinkVerdict(sink.name, res);
-        if (res.action !== "drop") {
+        if (res.action === "split" && batch.length > 1) {
+          cap = Math.max(1, Math.floor(batch.length / 2));
+          batch = [];
+          pending = {};
+          return "again";
+        }
+        if (res.action === "split") {
+          const e = batch[0] as Event;
+          log(
+            state,
+            `sink ${sink.name}: one event is larger than the receiver takes, dropped (${e.type} ${e.id}, ${e.session.id.slice(0, 8)} seq ${e.session.seq})`,
+          );
+        } else if (res.action !== "drop") {
           batch = [];
           pending = {};
           return false;
@@ -566,29 +586,42 @@ export async function flush(
       pending = {};
       return true;
     };
-    for (const ref of refs) {
-      if (stalled || sent >= MAX_PER_RUN) break;
-      let offset = pending[cursors.key(ref)] ?? c[cursors.key(ref)] ?? 0;
-      for (;;) {
-        const room = BATCH - batch.length;
-        const { events, offset: next } = outbox.read(ref, offset, room);
-        if (!events.length) break;
-        for (const e of events) {
-          const f = filterEvent(e, sink.tier, sink.pii, { home: os.homedir() });
-          if (f) batch.push(f);
-        }
-        offset = next;
-        pending[cursors.key(ref)] = offset;
-        if (batch.length >= BATCH) {
-          if (!(await send())) {
-            stalled = true;
-            break;
+    let again = true;
+    while (again && !stalled && sent < MAX_PER_RUN) {
+      again = false;
+      for (const ref of refs) {
+        if (again || stalled || sent >= MAX_PER_RUN) break;
+        let offset = pending[cursors.key(ref)] ?? c[cursors.key(ref)] ?? 0;
+        for (;;) {
+          const room = cap - batch.length;
+          const { events, offset: next } = outbox.read(ref, offset, room);
+          if (!events.length) break;
+          for (const e of events) {
+            const f = filterEvent(e, sink.tier, sink.pii, { home: os.homedir() });
+            if (f) batch.push(f);
           }
-          if (sent >= MAX_PER_RUN) break;
+          offset = next;
+          pending[cursors.key(ref)] = offset;
+          if (batch.length >= cap) {
+            const r = await send();
+            if (r === "again") {
+              again = true;
+              break;
+            }
+            if (!r) {
+              stalled = true;
+              break;
+            }
+            if (sent >= MAX_PER_RUN) break;
+          }
         }
       }
+      if (!again && !stalled && (batch.length || Object.keys(pending).length)) {
+        const r = await send();
+        if (r === "again") again = true;
+        else if (!r) stalled = true;
+      }
     }
-    if (!stalled && (batch.length || Object.keys(pending).length)) if (!(await send())) stalled = true;
     delivered[sink.name] = sent;
   };
   await Promise.all(sinks.map(drainSink));
