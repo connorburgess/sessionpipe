@@ -58,3 +58,23 @@ describe("adapter fixtures", () => {
     });
   }
 });
+
+describe("the launcher comes with every harness's reading (PROTOCOL.md §3)", () => {
+  it("each recorded hook, run with SESSIONPIPE_LAUNCHED_BY set, reports launched_by", () => {
+    let checked = 0;
+    for (const f of files) {
+      const fx = JSON.parse(readFileSync(f, "utf8"));
+      if (!fx.expect.length) continue;
+      const launcher = `${fx.harness}:launcher-${checked}`;
+      const r = readHook(adapterByName(fx.harness)!, {
+        argv: fx.input.argv,
+        stdin: fx.input.stdin,
+        env: { ...fx.input.env, SESSIONPIPE_LAUNCHED_BY: launcher },
+        cwd: fx.input.cwd ?? "/",
+      });
+      expect(r?.session.launched_by, path.relative(root, f)).toBe(launcher);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+});
