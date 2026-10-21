@@ -22,7 +22,8 @@ and released in lockstep. This file records protocol-level changes.
   `<harness>:<id>`, read from `SESSIONPIPE_LAUNCHED_BY` in the hook's environment. A script
   that runs `claude -p` for a session sets it, and a receiver can group the run under its
   launcher without reading it as a subagent, which `parent_id` would say (#65). A subagent
-  keeps its `parent_id` and gets no `launched_by`.
+  keeps its `parent_id` and gets no `launched_by`; a launcher that starts a further session
+  resets the variable, so it names the nearest launcher only.
 - Control: `start` is no longer Claude Code's alone (CONTROL.md §6; asked for by the
   maintainer on 2026-10-04, so the spec change ships with its code). A `start` names a
   session of any harness the machine can drive headlessly — the reference daemon drives

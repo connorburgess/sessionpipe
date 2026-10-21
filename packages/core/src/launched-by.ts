@@ -14,12 +14,13 @@ export function launchedBy(env: Record<string, string | undefined>): string | un
 }
 
 /** An adapter's reading of a hook, plus what every harness shares: the launcher, unless
- *  the harness gave the session a parent of its own (a subagent's launcher is its parent). */
+ *  the harness gave the session a parent of its own (a subagent's launcher is its parent)
+ *  or the value names the session itself (a launcher that forgot to reset it). */
 export function readHook(adapter: Adapter, input: HookInput): HookResult | null {
   const r = adapter.fromHook(input);
   if (r && !r.session.parent_id) {
     const launcher = launchedBy(input.env);
-    if (launcher) r.session.launched_by = launcher;
+    if (launcher && launcher !== `${adapter.name}:${r.session.id}`) r.session.launched_by = launcher;
   }
   return r;
 }

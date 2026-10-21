@@ -30,6 +30,9 @@ describe("readHook", () => {
   it("adds the launcher to the adapter's reading of the session", () => {
     expect(readHook(adapter({}), input({ [LAUNCHED_BY_ENV]: LAUNCHER }))?.session.launched_by).toBe(LAUNCHER);
   });
+  it("ignores a value that names the session itself", () => {
+    expect(readHook(adapter({}), input({ [LAUNCHED_BY_ENV]: "x:s" }))?.session).toEqual({ id: "s" });
+  });
   it("leaves a subagent to its parent", () => {
     const r = readHook(adapter({ parent_id: "p" }), input({ [LAUNCHED_BY_ENV]: LAUNCHER }));
     expect(r?.session).toEqual({ id: "s", parent_id: "p" });
