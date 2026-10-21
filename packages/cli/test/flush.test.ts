@@ -96,15 +96,21 @@ async function receiver(answers: (n: number) => [number, Record<string, string>]
 
 describe("a sink that refused waits (HTTP.md §2)", () => {
   it("a 429 stops the sink for retry-after, for every flush; the next 202 clears it", async () => {
-    const rx = await receiver((n) => (n === 1 ? [429, { "retry-after": "2" }] : [202, {}]));
+    // 3 s, not 2: the ladder's first step is 2 s too, so 2 s could not tell the header from it.
+    const rx = await receiver((n) => (n === 1 ? [429, { "retry-after": "3" }] : [202, {}]));
     try {
       const outbox = new Outbox(tmp);
       outbox.append({ harness: "codex", session: "r" }, [ev("r", 0)]);
       const sink = [{ name: "s", url: rx.url, tier: 3 as const, token: "t" }];
+      const t0 = Date.now();
       expect((await flush(tmp, sink, outbox)).s).toBe(0);
       const b = readBackoff(tmp, "s");
       expect(b?.failures).toBe(1);
-      expect(b?.until).toBeGreaterThan(Date.now() + 1500);
+      // `until` is retry-after from the moment the 429 came back: no earlier than t0, no
+      // later than now. Measured from before the flush, like the test below, so however
+      // slow the runner is between the sink's write and this read, the bounds hold.
+      expect(b?.until).toBeGreaterThanOrEqual(t0 + 3000);
+      expect(b?.until).toBeLessThanOrEqual(Date.now() + 3000);
       // Another worker, right after: no request at all.
       expect((await flush(tmp, sink, outbox)).s).toBe(0);
       expect(rx.hits()).toBe(1);
