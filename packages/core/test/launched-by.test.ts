@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
+import { Session } from "../schema/v1.js";
 import type { Adapter, HookInput } from "../src/adapters/types.js";
 import { LAUNCHED_BY_ENV, launchedBy, readHook } from "../src/launched-by.js";
 
@@ -17,6 +18,21 @@ describe("launchedBy (PROTOCOL.md §3)", () => {
     expect(launchedBy({ [LAUNCHED_BY_ENV]: " codex:019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b " })).toBe(
       "codex:019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b",
     );
+  });
+  it("agrees with the schema's pattern", () => {
+    const field = Session.shape.launched_by;
+    for (const v of [
+      LAUNCHER,
+      "a:b",
+      "no-colon",
+      "Claude:abc",
+      ":abc",
+      "codex:",
+      "codex:bad id",
+      `codex:${"a".repeat(129)}`,
+      `${"h".repeat(41)}:x`,
+    ])
+      expect(launchedBy({ [LAUNCHED_BY_ENV]: v }) !== undefined, v).toBe(field.safeParse(v).success);
   });
   it("is nothing when the variable is absent, blank or malformed", () => {
     expect(launchedBy({})).toBeUndefined();
