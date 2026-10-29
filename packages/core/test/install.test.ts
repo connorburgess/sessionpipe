@@ -215,6 +215,18 @@ describe("issue #8: files that are not plain JSON, and byte-identical round trip
     geminiCli.uninstall(env);
     expect(readFileSync(file, "utf8")).toBe(before);
   });
+  it("keeps a CRLF config.toml byte-identical through a codex install and uninstall", () => {
+    mkdirSync(path.join(home, ".codex"), { recursive: true });
+    const file = path.join(home, ".codex", "config.toml");
+    const before = 'model = "gpt-5"\r\napproval_policy = "on-request"\r\n';
+    writeFileSync(file, before);
+    codex.install(cmd, env);
+    expect(readFileSync(file, "utf8")).toMatch(
+      /^model = "gpt-5"\r\napproval_policy = "on-request"\r\nnotify = \[.*\]\r\n$/,
+    );
+    codex.uninstall(env, { created: [path.join(home, ".codex", "hooks.json")] });
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
   it("deletes a file sessionpipe created once uninstall empties it", () => {
     const file = path.join(home, ".codex", "hooks.json");
     const r = codex.install(cmd, env)[0]!;
