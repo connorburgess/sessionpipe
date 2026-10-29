@@ -8,7 +8,7 @@
 // Two rules from issue #8: a file that is not plain JSON (a comment, a trailing
 // comma, a write in progress) is never written back — the harness is skipped and
 // the report says why; and a file is written back in its own shape (indent, final
-// newline) so uninstall leaves it byte-identical. A file that did not exist before
+// newline, a byte-order mark) so uninstall leaves it byte-identical. A file that did not exist before
 // install is reported `created`, and uninstall deletes it once it is empty again.
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -41,8 +41,18 @@ export type JsonFile =
       indent: string;
       eol: string;
       finalNewline: boolean;
+      bom: boolean;
     }
-  | { ok: true; existed: false; value: Record<string, unknown>; raw: ""; indent: "  "; eol: "\n"; finalNewline: true }
+  | {
+      ok: true;
+      existed: false;
+      value: Record<string, unknown>;
+      raw: "";
+      indent: "  ";
+      eol: "\n";
+      finalNewline: true;
+      bom: false;
+    }
   | { ok: false; existed: true; reason: string };
 
 /** Read a JSON config file with its shape. Never guesses: a parse failure is a
@@ -52,8 +62,12 @@ export function readJsonFile(file: string): JsonFile {
   try {
     raw = readFileSync(file, "utf8");
   } catch {
-    return { ok: true, existed: false, value: {}, raw: "", indent: "  ", eol: "\n", finalNewline: true };
+    return { ok: true, existed: false, value: {}, raw: "", indent: "  ", eol: "\n", finalNewline: true, bom: false };
   }
+  // A UTF-8 byte-order mark (PowerShell 5's UTF8 encoding, older Windows editors): JSON.parse
+  // refuses it, the harnesses read past it. Kept, and written back, like the line ends.
+  const bom = raw.charCodeAt(0) === 0xfeff;
+  if (bom) raw = raw.slice(1);
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -74,13 +88,17 @@ export function readJsonFile(file: string): JsonFile {
     indent,
     eol,
     finalNewline: /\r?\n$/.test(raw),
+    bom,
   };
 }
 
 /** Serialise in the file's own shape. */
-export function formatJson(value: unknown, f: { indent: string; eol: string; finalNewline: boolean }): string {
+export function formatJson(
+  value: unknown,
+  f: { indent: string; eol: string; finalNewline: boolean; bom?: boolean },
+): string {
   const text = JSON.stringify(value, null, f.indent).replace(/\n/g, f.eol);
-  return f.finalNewline ? text + f.eol : text;
+  return (f.bom ? "\uFEFF" : "") + (f.finalNewline ? text + f.eol : text);
 }
 
 /** Back-compat helper for callers that only read. */
