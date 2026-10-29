@@ -292,14 +292,19 @@ function rehook(cfg: Config, wasLean: boolean): void {
   // downgrade of hooks a newer sessionpipe wrote. The sink stays either way; `install` rehooks.
   if (viaNpx(distDir)) {
     out(
-      "  The hooks need rewriting for this sink, but this copy runs from the npx cache: run `sessionpipe install` to rewrite them from a persistent one.",
+      "  The hooks need rewriting now, but this copy runs from the npx cache: run `sessionpipe install` to rewrite them from a persistent one.",
     );
     return;
   }
   try {
     assertSetupVersion(false);
   } catch (e) {
-    out(`  The hooks were not rewritten for this sink: ${(e as Error).message}`);
+    // Its advice to pass --allow-downgrade is install's: here the sink is already saved, so a
+    // second run would find nothing to rewrite.
+    const why = (e as Error).message.replace(/; this command would install .*$/s, "");
+    out(
+      `  The hooks need rewriting now and were left alone: ${why}. Rewrite them with that CLI's \`sessionpipe install\`, or with \`sessionpipe install --allow-downgrade\` to force ${VERSION}.`,
+    );
     return;
   }
   out(
