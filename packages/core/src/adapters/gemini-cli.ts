@@ -9,7 +9,7 @@ import path from "node:path";
 import { homeDir } from "../paths.js";
 import { ends, parseLines } from "../readers/files.js";
 import { readGemini } from "../readers/transcripts.js";
-import { installClaudeShaped, installedClaudeShaped, uninstallClaudeShaped } from "./claude-shaped.js";
+import { installClaudeShaped, installedClaudeShaped, readJson, uninstallClaudeShaped } from "./claude-shaped.js";
 import type { Adapter, HookInput, HookResult, InstallOptions, SessionFacts } from "./types.js";
 
 const NAME = "gemini-cli";
@@ -31,10 +31,7 @@ const eventsFor = (lean?: boolean) => (lean ? GEMINI_EVENTS.filter((e) => e !== 
 
 /** Before 0.46 the hooks system is off unless tools.enableHooks is true (issue #11). */
 export function geminiHooksActive(settingsFile: string): { active: boolean; note?: string } {
-  let tools: { enableHooks?: unknown } | undefined;
-  try {
-    tools = (JSON.parse(readFileSync(settingsFile, "utf8")) as { tools?: { enableHooks?: unknown } }).tools;
-  } catch {}
+  const tools = readJson(settingsFile).tools as { enableHooks?: unknown } | undefined;
   if (tools?.enableHooks === true) return { active: true };
   if (tools?.enableHooks === false)
     return { active: false, note: "inactive: tools.enableHooks is false in settings.json" };

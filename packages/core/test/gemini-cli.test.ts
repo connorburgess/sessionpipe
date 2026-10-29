@@ -103,6 +103,8 @@ describe("gemini-cli hooks active?", () => {
   it("tools.enableHooks in settings.json decides outright", () => {
     writeFileSync(settings, JSON.stringify({ tools: { enableHooks: true } }));
     expect(geminiHooksActive(settings)).toEqual({ active: true });
+    writeFileSync(settings, `\uFEFF${JSON.stringify({ tools: { enableHooks: true } })}`);
+    expect(geminiHooksActive(settings)).toEqual({ active: true });
     writeFileSync(settings, JSON.stringify({ tools: { enableHooks: false } }));
     expect(geminiHooksActive(settings)).toEqual({
       active: false,
