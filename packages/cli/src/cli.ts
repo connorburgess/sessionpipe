@@ -303,7 +303,7 @@ function rehook(cfg: Config, wasLean: boolean): void {
     // second run would find nothing to rewrite.
     const why = (e as Error).message.replace(/; this command would install .*$/s, "");
     out(
-      `  The hooks need rewriting now and were left alone: ${why}. Rewrite them with that CLI's \`sessionpipe install\`, or with \`sessionpipe install --allow-downgrade\` to force ${VERSION}.`,
+      `  The hooks need rewriting now and were left alone: ${why}. Rewrite them with the newer sessionpipe's \`install\`, or with this one's \`sessionpipe install --allow-downgrade\`.`,
     );
     return;
   }
