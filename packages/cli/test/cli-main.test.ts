@@ -492,6 +492,33 @@ describe.skipIf(process.platform === "win32")("uninstall", () => {
 });
 
 describe.skipIf(process.platform === "win32")("sink add | list | remove | test", () => {
+  it("a sink crossing tier 0 rewrites the hooks: the full set with one above it, the lean set without", async () => {
+    mkdirSync(path.join(home, ".claude"));
+    const settings = path.join(home, ".claude", "settings.json");
+    put(settings, {});
+    await run("install", "--claude-code");
+    const hooks = () => Object.keys(JSON.parse(readFileSync(settings, "utf8")).hooks);
+    expect(hooks()).not.toContain("PreToolUse");
+    const rx = await receiver();
+    const quiet = await run("sink", "add", rx.url, "--tier", "0", "--name", "quiet");
+    expect(quiet.text).not.toContain("hooking");
+    expect(hooks()).not.toContain("PreToolUse");
+    const loud = await run("sink", "add", rx.url, "--tier", "1", "--name", "loud");
+    expect(loud.text).toContain("A sink above tier 0: hooking every event.");
+    expect(loud.text).toMatch(/✓ claude-code: .*settings\.json written/);
+    expect(hooks()).toContain("PreToolUse");
+    expect((await run("status")).text).toMatch(/claude-code .*settings\.json\s+current/);
+    const gone = await run("sink", "remove", "loud");
+    expect(gone.text).toContain("No sink above tier 0 now: hooking one tool event per harness (the heartbeat's).");
+    expect(hooks()).not.toContain("PreToolUse");
+    expect((await run("status")).text).toMatch(/claude-code .*settings\.json\s+current/);
+  });
+  it("a sink crossing tier 0 with no harness hooked leaves the hooks alone", async () => {
+    const rx = await receiver();
+    const { text } = await run("sink", "add", rx.url, "--tier", "2");
+    expect(text).not.toContain("hooking");
+    expect(cfg().harnesses).toEqual({});
+  });
   it("adds a sink named after its host with the receiver's cap and endpoints, then lists it", async () => {
     const rx = await receiver({ wellKnown: { max_tier: 1, endpoints: { events: "/in" } } });
     const { text } = await run("sink", "add", rx.url, "--tier", "3", "--token", "tok", "--pii", "--control");
@@ -1092,6 +1119,34 @@ describe.skipIf(process.platform === "win32")("doctor", () => {
     expect(text).toContain("! the hook launcher is missing; run `sessionpipe install` again");
     expect(text).toContain("hooks run ");
     expect(text).toContain("→ node ? (gone: PATH's node)");
+  });
+
+  it("names the hook set when a sink crossing tier 0 is why the hooks are stale", async () => {
+    const file = path.join(home, ".claude", "settings.json");
+    put(file, {});
+    const bySet = (whenLean: "current" | "stale", otherFile = file) =>
+      vi
+        .spyOn(claudeCode, "installed")
+        .mockImplementation(((_c: unknown, _e: unknown, o?: { lean?: boolean }) =>
+          o?.lean
+            ? [{ file, state: whenLean }]
+            : [{ file: otherFile, state: whenLean === "stale" ? "current" : "stale" }]) as never);
+    writeConfig({
+      sinks: [{ name: "r", url: "https://r.invalid", tier: 2 }],
+      harnesses: { "claude-code": { enabled: true } },
+    } as never);
+    bySet("current");
+    expect((await run("doctor")).text).toMatch(
+      /! claude-code: the hooks in .*settings\.json are the lean set, but a sink is above tier 0 now; run `sessionpipe install` again/,
+    );
+    writeConfig({ sinks: [], harnesses: { "claude-code": { enabled: true } } } as never);
+    bySet("stale");
+    expect((await run("doctor")).text).toMatch(
+      /are the full set, but no sink is above tier 0 now; run `sessionpipe install` again/,
+    );
+    // The other set read for a different file says nothing about this one: the path reading stands.
+    bySet("stale", path.join(home, ".claude-second", "settings.json"));
+    expect((await run("doctor")).text).toMatch(/points at an old node or script path/);
   });
 
   it("a hook that can't be spawned, or fails: no wall clock; the in-process timing survives a bad line", async () => {

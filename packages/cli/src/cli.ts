@@ -278,6 +278,25 @@ function isLean(cfg: Config): boolean {
   return !cfg.sinks.some((s) => !s.paused && Math.min(s.tier, s.max_tier ?? 3) >= 1);
 }
 
+/** A sink crossing tier 0 changes which events the hooks watch (isLean): rewrite the
+ *  hooks of every harness that has them, as `install` promised when it hooked the lean set. */
+function rehook(cfg: Config, wasLean: boolean): void {
+  const lean = isLean(cfg);
+  if (lean === wasLean) return;
+  const hc = hookCommand();
+  const hooked = ADAPTERS.filter((a) =>
+    a.installed(hc, process.env, { lean: wasLean }).some((r) => r.state !== "missing"),
+  );
+  if (!hooked.length) return;
+  out(
+    lean
+      ? "  No sink above tier 0 now: hooking one tool event per harness (the heartbeat's)."
+      : "  A sink above tier 0: hooking every event.",
+  );
+  installHarnesses(hooked, cfg, lean);
+  writeConfig(cfg);
+}
+
 /** Write the hooks for these harnesses; remember which files sessionpipe created. */
 function installHarnesses(adapters: readonly (typeof ADAPTERS)[number][], cfg: Config, lean: boolean): void {
   if (usesLauncher()) {
@@ -559,7 +578,12 @@ function uninstall(): void {
 async function sink(): Promise<void> {
   const sub = args[1];
   const cfg = readConfig();
-  if (sub === "add" && args[2]) return sinkAdd(args[2], cfg);
+  if (sub === "add" && args[2]) {
+    const wasLean = isLean(cfg);
+    await sinkAdd(args[2], cfg);
+    rehook(cfg, wasLean);
+    return;
+  }
   if (sub === "list") {
     if (!cfg.sinks.length) out("  no sinks");
     for (const s of cfg.sinks)
@@ -570,10 +594,12 @@ async function sink(): Promise<void> {
   }
   if (sub === "remove" && args[2]) {
     const n = cfg.sinks.length;
+    const wasLean = isLean(cfg);
     for (const s of cfg.sinks) if (s.name === args[2]) dropSinkSecrets(s);
     cfg.sinks = cfg.sinks.filter((s) => s.name !== args[2]);
     writeConfig(cfg);
     out(cfg.sinks.length < n ? `  ✓ removed ${args[2]}` : `  no sink named ${args[2]}`);
+    rehook(cfg, wasLean);
     return;
   }
   if (sub === "test" && args[2]) {
@@ -1067,7 +1093,8 @@ async function doctor(): Promise<void> {
     );
   for (const a of ADAPTERS) {
     if (!a.detect()) continue;
-    const st = a.installed(hc, process.env, { lean: isLean(cfg) });
+    const lean = isLean(cfg);
+    const st = a.installed(hc, process.env, { lean });
     (report.harnesses as Record<string, unknown>)[a.name] = st.map((r) => ({
       file: tilde(r.file),
       state: r.state,
@@ -1077,10 +1104,17 @@ async function doctor(): Promise<void> {
       if (r.state === "inactive")
         warnings.push(`${a.name}: hooks are written but the harness will not run them — ${r.note ?? ""}`);
     for (const r of st)
-      if (r.state === "stale")
+      if (r.state === "stale") {
+        // The same file read against the other hook set: stale only because a sink crossed
+        // tier 0 since the hooks were written, not because a path moved.
+        const otherSet =
+          a.installed(hc, process.env, { lean: !lean }).find((x) => x.file === r.file)?.state === "current";
         warnings.push(
-          `${a.name}: the hook in ${tilde(r.file)} points at an old node or script path; run \`sessionpipe install\` again.`,
+          otherSet
+            ? `${a.name}: the hooks in ${tilde(r.file)} are the ${lean ? "full" : "lean"} set, but ${lean ? "no sink is above tier 0 now" : "a sink is above tier 0 now"}; run \`sessionpipe install\` again.`
+            : `${a.name}: the hook in ${tilde(r.file)} points at an old node or script path; run \`sessionpipe install\` again.`,
         );
+      }
     for (const r of st)
       if (r.state === "misplaced")
         warnings.push(
