@@ -3,7 +3,7 @@
 // Config: ~/.gemini/settings.json `hooks` key, same array-of-groups shape as Claude
 // Code but timeouts in MILLISECONDS and a `name` per handler. stdout must be JSON or
 // empty. Its own telemetry defaults logPrompts on; the installer says so once.
-import { execFileSync } from "node:child_process";
+import { type ExecFileSyncOptionsWithStringEncoding, execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { homeDir } from "../paths.js";
@@ -41,14 +41,17 @@ export function geminiVersion(
     ? findBinary({ names: ["gemini.exe", "gemini.cmd"], dirs: [path.dirname(process.execPath)], env })
     : "gemini";
   if (!bin) throw new Error("no gemini on PATH");
-  const shell = win && /\.cmd$/i.test(bin);
-  return execFileSync(shell ? `"${bin}"` : bin, ["--version"], {
+  const o: ExecFileSyncOptionsWithStringEncoding = {
     encoding: "utf8",
     timeout: 4000,
     stdio: ["ignore", "pipe", "ignore"],
-    shell,
     env,
-  }).trim();
+  };
+  // One command string under a shell: args beside `shell: true` are deprecated from node 24 (DEP0190).
+  const out = /\.cmd$/i.test(bin)
+    ? execFileSync(`"${bin}" --version`, { ...o, shell: true })
+    : execFileSync(bin, ["--version"], o);
+  return out.trim();
 }
 
 /** Before 0.46 the hooks system is off unless tools.enableHooks is true (issue #11). */
