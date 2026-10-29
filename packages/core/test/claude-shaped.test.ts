@@ -40,6 +40,14 @@ describe("readJsonFile and formatJson", () => {
     if (f.ok) expect(formatJson({ a: 1, b: [2] }, f)).toBe('{\r\n\t"a": 1,\r\n\t"b": [\r\n\t\t2\r\n\t]\r\n}\r\n');
     expect(readJson(file)).toEqual({ a: 1 });
   });
+  it("keeps a byte-order mark, with the CRLF behind it", () => {
+    writeFileSync(file, '\uFEFF{\r\n  "a": 1\r\n}\r\n');
+    const f = readJsonFile(file);
+    expect(f).toMatchObject({ ok: true, existed: true, bom: true, eol: "\r\n", indent: "  " });
+    if (f.ok) expect(formatJson({ a: 1 }, f)).toBe('\uFEFF{\r\n  "a": 1\r\n}\r\n');
+    expect(readJson(file)).toEqual({ a: 1 });
+    expect(readJsonFile(path.join(dir, "none.json"))).toMatchObject({ ok: true, existed: false, bom: false });
+  });
   it("refuses an array, a comment, and reads an unreadable file as nothing", () => {
     writeFileSync(file, "[1]");
     expect(readJsonFile(file)).toEqual({ ok: false, existed: true, reason: "not a JSON object" });
@@ -53,6 +61,21 @@ describe("readJsonFile and formatJson", () => {
 });
 
 describe("installClaudeShaped", () => {
+  it("hooks a file with a byte-order mark, and uninstall leaves it byte-identical", () => {
+    const before = '\uFEFF{\r\n  "permissions": {\r\n    "allow": [\r\n      "Bash(ls:*)"\r\n    ]\r\n  }\r\n}\r\n';
+    writeFileSync(file, before);
+    expect(installClaudeShaped(file, "claude-code", ["Stop"], cmd, OPTS)).toEqual({
+      file,
+      changed: true,
+      created: false,
+    });
+    const after = readFileSync(file, "utf8");
+    expect(after.startsWith('\uFEFF{\r\n  "permissions"')).toBe(true);
+    expect(JSON.parse(after.slice(1)).hooks.Stop).toHaveLength(1);
+    expect(installedClaudeShaped(file, "claude-code", ["Stop"], cmd, OPTS)).toBe("current");
+    uninstallClaudeShaped(file, ["Stop"]);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
   it("writes the top-level keys a harness demands, once", () => {
     const o = { ...OPTS, top: { version: 1 } };
     expect(installClaudeShaped(file, "cursor", ["stop"], cmd, o)).toEqual({ file, changed: true, created: true });

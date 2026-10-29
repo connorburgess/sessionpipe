@@ -194,6 +194,16 @@ describe("issue #8: files that are not plain JSON, and byte-identical round trip
     expect(geminiCli.uninstall(env)[0]?.skipped).toBe(true);
     expect(readFileSync(file, "utf8")).toBe(before);
   });
+  it("reads a settings.json with a byte-order mark, hooks it, and writes the mark back", () => {
+    const file = path.join(home, ".gemini", "settings.json");
+    const before = '\uFEFF{\r\n  "theme": "dark"\r\n}\r\n';
+    writeFileSync(file, before);
+    expect(geminiCli.install(cmd, env)[0]?.changed).toBe(true);
+    const after = readFileSync(file, "utf8");
+    expect(after.startsWith('\uFEFF{\r\n  "theme": "dark",\r\n  "hooks"')).toBe(true);
+    geminiCli.uninstall(env);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
   it("keeps a file's indent and missing final newline", () => {
     const file = path.join(home, ".gemini", "settings.json");
     const before = '{\n    "theme": "dark"\n}';
