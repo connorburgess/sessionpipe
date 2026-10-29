@@ -1127,7 +1127,7 @@ describe.skipIf(process.platform === "win32")("tail, backfill, forget, replay", 
         exit: vi.fn(),
       });
       await vi.advanceTimersByTimeAsync(600);
-      expect(lines).toEqual([`sessionpipe tail · tier 3 · ${state}/outbox (Ctrl-C to stop)`]);
+      expect(lines).toEqual([`sessionpipe tail · tier 3 · ${path.join(state, "outbox")} (Ctrl-C to stop)`]);
       outbox.append(old, [
         event("session.started", { source: "startup" }, { cwd: "/p", branch: "main" }),
         event("session.started", { source: "resume" }),

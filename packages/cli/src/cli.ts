@@ -1145,7 +1145,7 @@ async function tail(): Promise<void> {
     }
     return `${t} ${e.harness.name.padEnd(11)} ${e.session.id.slice(0, 4)}…  ${e.type.padEnd(17)} ${detail}`;
   };
-  out(`sessionpipe tail · tier ${tier} · ${tilde(state)}/outbox (Ctrl-C to stop)`);
+  out(`sessionpipe tail · tier ${tier} · ${tilde(path.join(state, "outbox"))} (Ctrl-C to stop)`);
   // Start at the end of each file unless --all.
   for (const ref of outbox.sessions()) {
     try {
