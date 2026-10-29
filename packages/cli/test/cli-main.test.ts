@@ -550,8 +550,10 @@ describe.skipIf(process.platform === "win32")("sink add | list | remove | test",
       const { text } = await run("sink", "add", rx.url, "--tier", "3", "--name", "loud");
       expect(text).toContain("✓ sink loud");
       expect(text).toContain(
-        "The hooks were not rewritten for this sink: refusing to downgrade sessionpipe: 99.0.0 is installed at",
+        "The hooks need rewriting now and were left alone: refusing to downgrade sessionpipe: 99.0.0 is installed at",
       );
+      expect(text).toContain("or with `sessionpipe install --allow-downgrade` to force");
+      expect(text).not.toContain("pass --allow-downgrade");
       expect(Object.keys(JSON.parse(readFileSync(settings, "utf8")).hooks)).not.toContain("PreToolUse");
       rmSync(dist, { recursive: true, force: true });
     },
