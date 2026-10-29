@@ -27,6 +27,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { controlMain, waitMain } from "../src/control/cli.js";
 import { moveControlSecrets } from "../src/control/store.js";
 import { HttpSink } from "../src/http-sink.js";
+import { installLauncher } from "../src/launcher.js";
 import { factsState, VERSION } from "../src/run.js";
 import { rerunGlobally, viaNpx } from "../src/runtime.js";
 import { bestStore, dropSinkSecrets, moveSinkSecrets, sinkWithSecrets } from "../src/secrets.js";
@@ -519,6 +520,42 @@ describe.skipIf(process.platform === "win32")("sink add | list | remove | test",
     expect(text).not.toContain("hooking");
     expect(cfg().harnesses).toEqual({});
   });
+  it("run from npx, a sink crossing tier 0 leaves the hooks to `install`", async () => {
+    mkdirSync(path.join(home, ".claude"));
+    const settings = path.join(home, ".claude", "settings.json");
+    put(settings, {});
+    await run("install", "--claude-code");
+    const rx = await receiver();
+    vi.mocked(viaNpx).mockReturnValueOnce(true);
+    const { text } = await run("sink", "add", rx.url, "--tier", "3", "--name", "loud");
+    expect(text).toContain("✓ sink loud");
+    expect(text).toContain("run `sessionpipe install` to rewrite them");
+    expect(text).not.toContain("hooking");
+    expect(Object.keys(JSON.parse(readFileSync(settings, "utf8")).hooks)).not.toContain("PreToolUse");
+    expect(rerunGlobally).not.toHaveBeenCalled();
+    expect(cfg().sinks.map((s) => s.name)).toEqual(["loud"]);
+  });
+  it.skipIf(process.platform === "win32")(
+    "a sink crossing tier 0 never downgrades hooks a newer sessionpipe wrote",
+    async () => {
+      mkdirSync(path.join(home, ".claude"));
+      const settings = path.join(home, ".claude", "settings.json");
+      put(settings, {});
+      await run("install", "--claude-code");
+      const dist = mkdtempSync(path.join(os.tmpdir(), "sp-dist-"));
+      writeFileSync(path.join(dist, "hook.js"), "");
+      writeFileSync(path.join(dist, "worker.js"), "");
+      installLauncher({ distDir: dist, node: process.execPath, version: "99.0.0" });
+      const rx = await receiver();
+      const { text } = await run("sink", "add", rx.url, "--tier", "3", "--name", "loud");
+      expect(text).toContain("✓ sink loud");
+      expect(text).toContain(
+        "The hooks were not rewritten for this sink: refusing to downgrade sessionpipe: 99.0.0 is installed at",
+      );
+      expect(Object.keys(JSON.parse(readFileSync(settings, "utf8")).hooks)).not.toContain("PreToolUse");
+      rmSync(dist, { recursive: true, force: true });
+    },
+  );
   it("adds a sink named after its host with the receiver's cap and endpoints, then lists it", async () => {
     const rx = await receiver({ wellKnown: { max_tier: 1, endpoints: { events: "/in" } } });
     const { text } = await run("sink", "add", rx.url, "--tier", "3", "--token", "tok", "--pii", "--control");

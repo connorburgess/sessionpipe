@@ -288,6 +288,20 @@ function rehook(cfg: Config, wasLean: boolean): void {
     a.installed(hc, process.env, { lean: wasLean }).some((r) => r.state !== "missing"),
   );
   if (!hooked.length) return;
+  // The guards `install` runs before it writes hooks: no hook path into the npx cache, no
+  // downgrade of hooks a newer sessionpipe wrote. The sink stays either way; `install` rehooks.
+  if (viaNpx(distDir)) {
+    out(
+      "  The hooks need rewriting for this sink, but this copy runs from the npx cache: run `sessionpipe install` to rewrite them from a persistent one.",
+    );
+    return;
+  }
+  try {
+    assertSetupVersion(false);
+  } catch (e) {
+    out(`  The hooks were not rewritten for this sink: ${(e as Error).message}`);
+    return;
+  }
   out(
     lean
       ? "  No sink above tier 0 now: hooking one tool event per harness (the heartbeat's)."
