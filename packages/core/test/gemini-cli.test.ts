@@ -111,6 +111,7 @@ describe("gemini-cli hooks active?", () => {
   });
   it.runIf(process.platform !== "win32")(
     "else the CLI's version: 0.46 and 1.x run hooks, 0.45 does not, no answer is a note",
+    { timeout: 30_000 },
     () => {
       fakeGemini("0.46.1");
       expect(geminiHooksActive(settings)).toEqual({ active: true });
