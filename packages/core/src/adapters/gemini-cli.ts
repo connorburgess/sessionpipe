@@ -10,6 +10,7 @@ import { homeDir } from "../paths.js";
 import { ends, parseLines } from "../readers/files.js";
 import { readGemini } from "../readers/transcripts.js";
 import { installClaudeShaped, installedClaudeShaped, readJson, uninstallClaudeShaped } from "./claude-shaped.js";
+import { findBinary } from "./headless.js";
 import type { Adapter, HookInput, HookResult, InstallOptions, SessionFacts } from "./types.js";
 
 const NAME = "gemini-cli";
@@ -29,6 +30,27 @@ const settings = (env: NodeJS.ProcessEnv) => path.join(geminiDir(env), "settings
 const validTool = (n: unknown): n is string => typeof n === "string" && /^[A-Za-z0-9_.:-]{1,120}$/.test(n);
 const eventsFor = (lean?: boolean) => (lean ? GEMINI_EVENTS.filter((e) => e !== "BeforeTool") : [...GEMINI_EVENTS]);
 
+/** `gemini --version`. On Windows the CLI is npm's gemini.cmd shim, which only a shell runs
+ *  (node refuses a bare spawn of a .cmd), so there it is looked up on PATH and run through one. */
+export function geminiVersion(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const win = platform === "win32";
+  const bin = win
+    ? findBinary({ names: ["gemini.exe", "gemini.cmd"], dirs: [path.dirname(process.execPath)], env })
+    : "gemini";
+  if (!bin) throw new Error("no gemini on PATH");
+  const shell = win && /\.cmd$/i.test(bin);
+  return execFileSync(shell ? `"${bin}"` : bin, ["--version"], {
+    encoding: "utf8",
+    timeout: 4000,
+    stdio: ["ignore", "pipe", "ignore"],
+    shell,
+    env,
+  }).trim();
+}
+
 /** Before 0.46 the hooks system is off unless tools.enableHooks is true (issue #11). */
 export function geminiHooksActive(settingsFile: string): { active: boolean; note?: string } {
   const tools = readJson(settingsFile).tools as { enableHooks?: unknown } | undefined;
@@ -37,11 +59,7 @@ export function geminiHooksActive(settingsFile: string): { active: boolean; note
     return { active: false, note: "inactive: tools.enableHooks is false in settings.json" };
   let version = "";
   try {
-    version = execFileSync("gemini", ["--version"], {
-      encoding: "utf8",
-      timeout: 4000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    version = geminiVersion();
   } catch {
     return {
       active: true,
