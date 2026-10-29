@@ -7,7 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { geminiCli, geminiHooksActive } from "../src/adapters/gemini-cli.js";
+import { geminiCli, geminiHooksActive, geminiVersion } from "../src/adapters/gemini-cli.js";
 import type { FactsState, HookCommand } from "../src/adapters/types.js";
 
 // The version checks spawn a shell each; under a full parallel run that can take seconds.
@@ -135,6 +135,20 @@ describe("gemini-cli hooks active?", () => {
       expect(geminiHooksActive(settings).active).toBe(true);
     },
   );
+});
+
+describe("geminiVersion", () => {
+  it("on Windows finds gemini.cmd on PATH and runs it through a shell; with no shim there it throws", () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), "sp-gemini-cmd-"));
+    const shim = path.join(bin, "gemini.cmd");
+    writeFileSync(shim, process.platform === "win32" ? "@echo 0.46.1\r\n" : "#!/bin/sh\nprintf '%s' 0.46.1\n");
+    chmodSync(shim, 0o755);
+    expect(geminiVersion("win32", { PATH: bin })).toBe("0.46.1");
+    const empty = mkdtempSync(path.join(os.tmpdir(), "sp-gemini-none-"));
+    expect(() => geminiVersion("win32", { PATH: empty })).toThrow("no gemini on PATH");
+    rmSync(bin, { recursive: true, force: true });
+    rmSync(empty, { recursive: true, force: true });
+  });
 });
 
 describe("gemini-cli install and installed", () => {
