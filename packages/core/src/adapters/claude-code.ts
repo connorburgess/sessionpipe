@@ -19,7 +19,7 @@ import { ends, parseLines, recentFiles, scanLines } from "../readers/files.js";
 import { gitFacts } from "../readers/git.js";
 import { isInjected, readClaude } from "../readers/transcripts.js";
 import type { HarnessAccount } from "../types.js";
-import { installClaudeShaped, installedClaudeShaped, uninstallClaudeShaped } from "./claude-shaped.js";
+import { installClaudeShaped, installedClaudeShaped, readJson, uninstallClaudeShaped } from "./claude-shaped.js";
 import type {
   Adapter,
   BackfillRow,
@@ -514,13 +514,7 @@ const ANTHROPIC_HOST = /(^|\.)anthropic\.com$/i;
  *  machine that uses it), and its host as the name control's pair and hello give it.
  *  Only that one key is read; the tokens and headers beside it never are. */
 function apiAccount(dir: string): { id: string; name: string } | null {
-  let base: unknown;
-  try {
-    base = (JSON.parse(readFileSync(settingsIn(dir), "utf8")) as { env?: { ANTHROPIC_BASE_URL?: unknown } }).env
-      ?.ANTHROPIC_BASE_URL;
-  } catch {
-    return null;
-  }
+  const base = (readJson(settingsIn(dir)) as { env?: { ANTHROPIC_BASE_URL?: unknown } }).env?.ANTHROPIC_BASE_URL;
   if (typeof base !== "string") return null;
   let u: URL;
   try {

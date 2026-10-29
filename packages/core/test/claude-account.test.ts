@@ -2,7 +2,7 @@
 // Which Claude Code accounts are signed in on a machine, for control's pair and hello:
 // the id events carry as `session.account_id`, and the email the receiver names it by.
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,6 +81,15 @@ describe("a home that runs on another API", () => {
     const got = claudeAccounts([kimi], home);
     expect(got).toEqual([{ harness: "claude-code", id: apiId(KIMI), name: new URL(KIMI).host }]);
     expect(JSON.stringify(got)).not.toMatch(/placeholder|secret|Modal-Key/);
+  });
+  it("reads the endpoint through a byte-order mark, as PowerShell writes the file", () => {
+    const dir = path.join(home, ".claude-kimi");
+    onApi(dir, KIMI);
+    const file = path.join(dir, "settings.json");
+    writeFileSync(file, `\uFEFF${readFileSync(file, "utf8")}`);
+    expect(claudeAccounts([dir], home)).toEqual([
+      { harness: "claude-code", id: apiId(KIMI), name: new URL(KIMI).host },
+    ]);
   });
   it("is one account in every home that uses the endpoint, and a login next to it wins", () => {
     onApi(path.join(home, ".claude-kimi"), KIMI);
