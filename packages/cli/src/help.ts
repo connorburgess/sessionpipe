@@ -22,6 +22,11 @@ export function usageTable(harnesses: readonly string[]): Record<string, string>
     update: "update [off|on] (install the latest now; off/on: the daemon's daily update)",
     "update off": "update off",
     "update on": "update on",
+    titles:
+      "titles [on|off|refresh] [--days 30] (on: name Claude Code sessions as claude.ai does, reading Claude Code's sign-in; off by default)",
+    "titles on": "titles on [--days 30]",
+    "titles off": "titles off",
+    "titles refresh": "titles refresh [--days 30]",
     control: "control pair|mode|status|keys|off|run (use --help after a subcommand for its options)",
     "control pair":
       "control pair <receiver> [--folder DIR]… [--mode safe|auto|inherit] [--tier 0-3] [--token T] [--name N] [--no-service]",

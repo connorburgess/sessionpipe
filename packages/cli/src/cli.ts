@@ -33,9 +33,11 @@ import {
   makeEvent,
   Outbox,
   readConfig,
+  type Session,
   type SinkConfig,
   stateDir,
   type Tier,
+  takeLock,
   tilde,
   writeConfig,
 } from "@sessionpipe/core";
@@ -158,6 +160,8 @@ async function command(cmd: string): Promise<void> {
       return replay();
     case "update":
       return update();
+    case "titles":
+      return titles();
     case "worker":
       return workerFromArgv();
     case "control":
@@ -192,6 +196,7 @@ Usage:
   sessionpipe tail [--session ID] [--tier N] [--harness NAME]
   sessionpipe backfill [--days 30] | forget <harness> <session> | replay --sink NAME
   sessionpipe update [off|on]       (install the latest now; off/on: the daemon's daily update)
+  sessionpipe titles [on|off|refresh] (on: name Claude Code sessions as claude.ai does; off by default)
 ${CONTROL_HELP}
 
 Docs: https://sessionpipe.org · nothing leaves this machine until you add a sink.`);
@@ -257,7 +262,7 @@ async function install(): Promise<void> {
   installHarnesses(adapters, cfg, lean);
   writeConfig(cfg);
   const days = Number(flag("--backfill") ?? 30);
-  if (days > 0) backfillRows(adapters, days, cfg);
+  if (days > 0) await backfillRows(adapters, days, cfg);
   out("");
   const live = cfg.sinks.filter((s) => !s.paused);
   if (live.length) out(`  Reporting to ${live.map((s) => `${s.name} (tier ${s.tier})`).join(", ")}.`);
@@ -670,45 +675,89 @@ function collectRows(
   return rows;
 }
 
-function backfillRows(adapters: readonly (typeof ADAPTERS)[number][], days: number, cfg: Config): void {
-  queueBackfill(collectRows(adapters, days), days, cfg);
+async function backfillRows(adapters: readonly (typeof ADAPTERS)[number][], days: number, cfg: Config): Promise<void> {
+  await queueBackfill(collectRows(adapters, days), days, cfg);
 }
 
-function queueBackfill(rows: { harness: string; row: BackfillRow }[], days: number, cfg: Config): void {
+/** Queue each row as session.backfill: every session not backfilled before; or, with
+ *  `renames` (`sessionpipe titles on`), only each one already sent, live or backfilled,
+ *  under another name than its harness's service now gives it, again, with its next seq,
+ *  so a receiver shows that name without waiting for the session's next event. With
+ *  remote titles on, a row takes that name first (an adapter's remoteFacts: claude.ai's,
+ *  for Claude Code). Four sessions at a time, each under its own lock, as the worker takes
+ *  it: a live session's seq and facts are the worker's too. One a hook holds right now is
+ *  left to its own events, which carry the name as well. */
+async function queueBackfill(
+  rows: { harness: string; row: BackfillRow }[],
+  days: number,
+  cfg: Config,
+  renames = false,
+): Promise<{ named: number; renamed: number }> {
   const outbox = new Outbox(state);
-  let n = 0;
+  const facts = factsState(state);
   const machine = machineName(cfg, os.hostname());
-  for (const { harness, row } of rows) {
+  let n = 0;
+  let named = 0;
+  let renamed = 0;
+  const one = async ({ harness, row }: { harness: string; row: BackfillRow }): Promise<void> => {
     const ref = { harness, session: row.session.id };
-    const facts = factsState(state).get(harness, row.session.id);
-    if (facts.backfilled) continue;
-    const { id, ...rest } = row.session;
-    const e = makeEvent(
-      {
-        type: "session.backfill",
-        harnessEvent: "backfill",
-        data: {
-          started_at: new Date(row.started_at).toISOString(),
-          last_at: new Date(row.last_at).toISOString(),
-          ...(row.turns !== undefined ? { turns: row.turns } : {}),
+    const release = takeLock(state, ref);
+    if (!release) return;
+    try {
+      const adapter = ADAPTERS.find((a) => a.name === harness);
+      let remote = false;
+      if (cfg.remote_titles && adapter?.remoteFacts && row.transcript) {
+        const got = await adapter.remoteFacts(row.session, row.session, row.transcript, facts);
+        if (got.title) {
+          Object.assign(row.session, got);
+          remote = true;
+          named++;
+        }
+      }
+      const mem = facts.get(harness, row.session.id);
+      const known = mem.session as Partial<Session> | undefined;
+      const rename = remote && (mem.backfilled || known) && row.session.title !== (known?.title ?? mem.sent_title);
+      if (renames ? !rename : mem.backfilled) return;
+      const { id, ...rest } = row.session;
+      const e = makeEvent(
+        {
+          type: "session.backfill",
+          harnessEvent: "backfill",
+          data: {
+            started_at: new Date(row.started_at).toISOString(),
+            last_at: new Date(row.last_at).toISOString(),
+            ...(row.turns !== undefined ? { turns: row.turns } : {}),
+          },
         },
-      },
-      {
-        harness: { name: harness },
-        session: { ...rest, id, seq: outbox.nextSeq(ref), machine, ...(rest.cwd ? { cwd: tilde(rest.cwd) } : {}) },
-        now: row.last_at,
-      },
-    );
-    outbox.append(ref, [e]);
-    factsState(state).save(harness, row.session.id, { backfilled: true });
-    n++;
-  }
-  out(`  ✓ Backfill: ${n} session${n === 1 ? "" : "s"} from the last ${days} days queued as session.backfill`);
+        {
+          harness: { name: harness },
+          session: { ...rest, id, seq: outbox.nextSeq(ref), machine, ...(rest.cwd ? { cwd: tilde(rest.cwd) } : {}) },
+          now: row.last_at,
+        },
+      );
+      outbox.append(ref, [e]);
+      // What was sent is what a later rename compares with; a live session's next light
+      // event (which reads no facts) carries it too.
+      facts.save(harness, row.session.id, {
+        backfilled: true,
+        sent_title: row.session.title,
+        ...(known ? { session: { ...known, title: row.session.title, title_source: row.session.title_source } } : {}),
+      });
+      if (rename) renamed++;
+      else n++;
+    } finally {
+      release();
+    }
+  };
+  for (let i = 0; i < rows.length; i += 4) await Promise.all(rows.slice(i, i + 4).map(one));
+  if (!renames)
+    out(`  ✓ Backfill: ${n} session${n === 1 ? "" : "s"} from the last ${days} days queued as session.backfill`);
   void drain(state, cfg.sinks, outbox);
+  return { named, renamed };
 }
 
-function backfill(): void {
-  backfillRows(selectedAdapters(), Number(flag("--days") ?? 30), readConfig());
+function backfill(): Promise<void> {
+  return backfillRows(selectedAdapters(), Number(flag("--days") ?? 30), readConfig());
 }
 
 async function forget(): Promise<void> {
@@ -1247,6 +1296,43 @@ async function update(): Promise<void> {
             : "stop `sessionpipe control run` and start it again"
       } moves it (a run in progress stops).`,
     );
+}
+
+/** `sessionpipe titles [on|off]`: whether the worker asks a harness's own service for a
+ *  session's name (config.json `remote_titles`, off by default). For Claude Code that is
+ *  claude.ai, which names the sessions the Claude app starts and never tells the machine;
+ *  asking means reading the sign-in token Claude Code keeps here. */
+async function titles(): Promise<void> {
+  const sub = args[1];
+  const set = sub === "on" || sub === "off";
+  const cfg = readConfig();
+  if (set) {
+    cfg.remote_titles = sub === "on";
+    writeConfig(cfg);
+  }
+  const done = set ? "✓ " : "";
+  out(
+    cfg.remote_titles
+      ? `  ${done}Claude Code sessions with a claude.ai link take claude.ai's name, as the Claude app shows it, unless you named them here. To ask, sessionpipe reads Claude Code's sign-in token on this machine and sends it to api.anthropic.com only; it never stores or forwards it. \`sessionpipe titles off\` stops this.`
+      : `  ${done}Session names come from this machine's files only, and no sign-in token is read. A session the Claude app started has a name there that never reaches this machine; \`sessionpipe titles on\` asks claude.ai for it.`,
+  );
+  if (!cfg.remote_titles || (sub !== "on" && sub !== "refresh")) return;
+  // Sessions already sent under another name take claude.ai's now, not at their next event.
+  const days = Number(flag("--days") ?? 30);
+  const { named, renamed } = await queueBackfill(
+    collectRows(
+      ADAPTERS.filter((a) => a.remoteFacts && a.detect()),
+      days,
+    ),
+    days,
+    cfg,
+    true,
+  );
+  out(
+    named
+      ? `  Asked claude.ai about the last ${days} days' sessions: ${named} named there, ${renamed} sent again under that name.`
+      : `  None of the last ${days} days' sessions has a name on claude.ai that could be read here: none was started from the Claude app or has a claude.ai link, or Claude Code's sign-in is missing or about to expire (run \`claude\` once, then \`sessionpipe titles refresh\`).`,
+  );
 }
 
 // The process entrypoint (`node dist/cli.js`, or npm's bin link to it) runs the command;

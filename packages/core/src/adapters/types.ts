@@ -59,6 +59,8 @@ export interface BackfillRow {
   started_at: number;
   last_at: number;
   turns?: number;
+  /** The file the row was read from, for what `remoteFacts` asks about it. Never sent. */
+  transcript?: string;
 }
 
 /** The command a hook entry runs: absolute node, absolute script, then args. */
@@ -116,6 +118,19 @@ export interface Adapter {
     state: FactsState,
     env?: NodeJS.ProcessEnv,
   ): SessionFacts;
+  /** What only the harness's own service knows about a session (claude.ai's name for a
+   *  Claude Code session), asked over the network with the person's own sign-in. The
+   *  worker calls it after `facts`, and only when the person turned it on (config.json
+   *  `remote_titles`); never on the hook path. What it returns replaces what `facts`
+   *  found; an empty object leaves it. Never rejects: a service it can't ask, or a
+   *  sign-in it can't read, is an empty object. */
+  remoteFacts?(
+    session: { id: string } & Partial<Session>,
+    local: SessionFacts,
+    transcript: string | undefined,
+    state: FactsState,
+    env?: NodeJS.ProcessEnv,
+  ): Promise<Partial<SessionFacts>>;
   backfill(sinceMs: number, env?: NodeJS.ProcessEnv): BackfillRow[];
 }
 

@@ -22,12 +22,12 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { adapterByName, makeEvent, Outbox, readConfig, writeConfig } from "@sessionpipe/core";
+import { adapterByName, makeEvent, Outbox, readConfig, takeLock, writeConfig } from "@sessionpipe/core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlMain, waitMain } from "../src/control/cli.js";
 import { moveControlSecrets } from "../src/control/store.js";
 import { HttpSink } from "../src/http-sink.js";
-import { VERSION } from "../src/run.js";
+import { factsState, VERSION } from "../src/run.js";
 import { rerunGlobally, viaNpx } from "../src/runtime.js";
 import { bestStore, dropSinkSecrets, moveSinkSecrets, sinkWithSecrets } from "../src/secrets.js";
 import { globalPrefix, installVersion, latestVersion } from "../src/update.js";
@@ -1276,6 +1276,98 @@ describe.skipIf(process.platform === "win32")("tail, backfill, forget, replay", 
     expect(all.lines.sort()).toEqual(["  f: 3 events delivered", "  rx: 3 events delivered"]);
     outbox.append({ harness: "claude-code", session: "s3" }, [event("session.heartbeat", {})]);
     expect((await run("replay", "--sink", "f")).lines).toEqual(["  f: 1 event delivered"]);
+  });
+});
+
+describe("titles", () => {
+  it("on and off set remote_titles; with no word it says which holds", async () => {
+    expect((await run("titles")).lines).toEqual([
+      "  Session names come from this machine's files only, and no sign-in token is read. A session the Claude app started has a name there that never reaches this machine; `sessionpipe titles on` asks claude.ai for it.",
+    ]);
+    expect(cfg().remote_titles).toBeUndefined();
+    expect((await run("titles", "on")).text).toContain(
+      "✓ Claude Code sessions with a claude.ai link take claude.ai's name, as the Claude app shows it, unless you named them here. To ask, sessionpipe reads Claude Code's sign-in token on this machine and sends it to api.anthropic.com only",
+    );
+    expect(cfg().remote_titles).toBe(true);
+    expect((await run("titles")).text).toMatch(/^ {2}Claude Code sessions with a claude\.ai link/);
+    expect((await run("titles", "off")).text).toContain("✓ Session names come from this machine's files only");
+    expect(cfg().remote_titles).toBe(false);
+  });
+
+  it("on and refresh send again, under claude.ai's name, each session already sent under another", async () => {
+    const id = (n: number) => `bbbbbbbb-0000-4000-8000-00000000000${n}`;
+    const row = (n: number, transcript = `/t/${n}.jsonl`) => ({
+      session: { id: id(n), title: "the first ask", title_source: "first-ask" as const },
+      started_at: Date.now() - 1000,
+      last_at: Date.now(),
+      ...(transcript ? { transcript } : {}),
+    });
+    // 1 was backfilled and 6 sent live under the first ask; 2 went live under the name claude.ai
+    // has; 3 was never sent; claude.ai has no name for 4; 5 has no transcript to ask about.
+    // 9 was sent before too, but a hook of it holds its lock right now.
+    vi.spyOn(claudeCode, "backfill").mockImplementation(() => [
+      row(1),
+      row(2),
+      row(3),
+      row(4),
+      row(5, ""),
+      row(6),
+      row(9),
+    ]);
+    vi.spyOn(claudeCode, "detect").mockReturnValue(true);
+    const remote = vi
+      .spyOn(claudeCode as Required<typeof claudeCode>, "remoteFacts")
+      .mockImplementation(async (s) =>
+        s.id === id(4) ? {} : { title: `claude.ai ${s.id.slice(-1)}`, title_source: "harness" as const },
+      );
+    const facts = factsState(state);
+    facts.save("claude-code", id(1), { backfilled: true });
+    facts.save("claude-code", id(2), { session: { title: "claude.ai 2", title_source: "harness" } });
+    facts.save("claude-code", id(6), { session: { title: "the first ask", cwd: "/w" } });
+    facts.save("claude-code", id(9), { backfilled: true });
+    const held = takeLock(state, { harness: "claude-code", session: id(9) });
+    expect((await run("titles", "on")).lines[1]).toBe(
+      "  Asked claude.ai about the last 30 days' sessions: 4 named there, 2 sent again under that name.",
+    );
+    expect(remote).toHaveBeenCalledTimes(5);
+    const sent = (n: number) => new Outbox(state).read({ harness: "claude-code", session: id(n) }, 0).events;
+    expect(sent(1)).toMatchObject([
+      { type: "session.backfill", session: { title: "claude.ai 1", title_source: "harness" } },
+    ]);
+    expect(sent(6)).toMatchObject([{ type: "session.backfill", session: { title: "claude.ai 6" } }]);
+    for (const n of [2, 3, 4, 5, 9]) expect(sent(n)).toEqual([]);
+    expect(remote.mock.calls.map((c) => c[0].id)).not.toContain(id(9));
+    held?.();
+    expect(facts.get("claude-code", id(6))).toMatchObject({
+      backfilled: true,
+      sent_title: "claude.ai 6",
+      session: { title: "claude.ai 6", title_source: "harness", cwd: "/w" },
+    });
+    // Again: nothing new to send. Asking which holds asks claude.ai nothing.
+    // Again: 9's hook is done now, so it goes; nothing else is new.
+    expect((await run("titles", "refresh", "--days", "7")).lines[1]).toBe(
+      "  Asked claude.ai about the last 7 days' sessions: 5 named there, 1 sent again under that name.",
+    );
+    expect(sent(9)).toMatchObject([{ type: "session.backfill", session: { title: "claude.ai 9" } }]);
+    await run("titles");
+    expect(remote).toHaveBeenCalledTimes(11);
+    // A backfill takes claude.ai's names too; a harness with nothing to ask is left alone.
+    vi.mocked(claudeCode.backfill).mockImplementation(() => [row(7)]);
+    vi.spyOn(codex, "backfill").mockReturnValue([{ ...row(8), session: { id: "codex-8", title: "local" } }]);
+    await run("backfill", "--claude-code", "--codex");
+    expect(sent(7)).toMatchObject([{ type: "session.backfill", session: { title: "claude.ai 7" } }]);
+    expect(new Outbox(state).read({ harness: "codex", session: "codex-8" }, 0).events).toMatchObject([
+      { session: { title: "local" } },
+    ]);
+    // Off: nothing is asked, refresh or not.
+    await run("titles", "off");
+    await run("titles", "refresh");
+    expect(remote).toHaveBeenCalledTimes(12);
+    // On, with nothing it could name.
+    vi.mocked(claudeCode.detect).mockReturnValue(false);
+    expect((await run("titles", "on")).lines[1]).toMatch(
+      /^ {2}None of the last 30 days' sessions has a name on claude\.ai that could be read here/,
+    );
   });
 });
 
