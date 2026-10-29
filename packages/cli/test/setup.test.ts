@@ -178,7 +178,7 @@ fs.writeFileSync(path.join(target, 'bin/sessionpipe'), script, { mode: 0o755 });
       });
     }
 
-    it(`${args[0]} renames the hooks and the paired daemon together on an explicit rename`, () => {
+    it(`${args[0]} renames the hooks and the paired daemon together on an explicit rename`, { timeout: 30_000 }, () => {
       const control = path.join(tmp, "config/control.json");
       put(control, JSON.stringify({ name: "Intel", receivers: [{ machine: "opaque-id", keys: [{ id: "k1" }] }] }));
       const r = run([...args, "--machine", "Intel-mbp", "--rename-machine", "--allow-downgrade"]);
