@@ -115,8 +115,11 @@ function dropLine(text: string, index: number, length: number): string {
 /** Put `line` at the top level: before the first table, or at the end of a file that has
  *  none. The line takes the file's own line end, so a CRLF file stays one. */
 export function insertTopLevel(text: string, line: string): string {
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const { head, tail } = split(text);
+  // The line joins the top-level section, so its line end is that section's own; a head
+  // with no line end of its own takes the file's.
+  const body = head.replace(/\s*$/, "");
+  const eol = (body.includes("\n") ? body : text).includes("\r\n") ? "\r\n" : "\n";
   const top = head.trim() ? head.replace(/\s*$/, eol) : "";
   if (!tail) return top + line + eol;
   return `${top + line}${eol}${eol}${tail}`;

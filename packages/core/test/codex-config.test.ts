@@ -66,6 +66,11 @@ describe("codex config.toml, the corners", () => {
     const before = withNotify(table, line);
     expect(before).toBe(`${crlf}${line}\r\n\r\n[projects."/x"]\r\ntrust_level = "trusted"\r\n`);
     expect(withoutNotify(before)).toBe(table);
+    // The top level decides: an LF head keeps LF even when a table below it is CRLF.
+    const mixed = 'model = "gpt-5"\napproval_policy = "on-request"\n\r\n[projects."/x"]\r\ntrust_level = "trusted"\r\n';
+    expect(withNotify(mixed, line)).toBe(
+      `model = "gpt-5"\napproval_policy = "on-request"\n${line}\n\n[projects."/x"]\r\ntrust_level = "trusted"\r\n`,
+    );
   });
   it("a single-quoted string hides a bracket; a notify that is no array is another tool's", () => {
     expect(firstTableAt("a = '[x]'\nb = 1\n[t]\n")).toBe("a = '[x]'\nb = 1\n".length);
