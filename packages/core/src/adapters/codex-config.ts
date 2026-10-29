@@ -5,7 +5,7 @@
 // folder it trusts, so a line appended at the end lands inside one and never runs.
 // Ported from spacesheep-cli lib/codex-config.js. Pure text in, text out.
 
-const NOTIFY_LINE = /^[ \t]*notify[ \t]*=[ \t]*(\[.*\])[ \t]*(?:#.*)?$/m;
+const NOTIFY_LINE = /^[ \t]*notify[ \t]*=[ \t]*(\[.*\])[ \t]*(?:#.*)?(?=\r?$)/m;
 const NOTIFY_KEY = /^[ \t]*notify[ \t]*=/m;
 /** A notify that runs sessionpipe's hook directly (or through its launcher). */
 export const OURS = /(?:hook\.js|sessionpipe-hook)",\s*"codex",\s*"notify"/;
@@ -112,11 +112,14 @@ function dropLine(text: string, index: number, length: number): string {
   return text.slice(0, index) + text.slice(index + length).replace(/^\r?\n/, "");
 }
 
-/** Put `line` at the top level: before the first table, or at the end of a file that has none. */
+/** Put `line` at the top level: before the first table, or at the end of a file that has
+ *  none. The line takes the file's own line end, so a CRLF file stays one. */
 export function insertTopLevel(text: string, line: string): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const { head, tail } = split(text);
-  if (!tail) return (head.trim() ? head.replace(/\s*$/, "\n") : "") + line + "\n";
-  return `${(head.trim() ? head.replace(/\s*$/, "\n") : "") + line}\n\n${tail}`;
+  const top = head.trim() ? head.replace(/\s*$/, eol) : "";
+  if (!tail) return top + line + eol;
+  return `${top + line}${eol}${eol}${tail}`;
 }
 
 /** The config with `line` as its notify, for a config whose notify is ours or absent. */

@@ -51,6 +51,22 @@ describe("codex config.toml", () => {
 });
 
 describe("codex config.toml, the corners", () => {
+  it("keeps CRLF line ends: the notify line goes in with them, reads back as ours, and comes out without a trace", () => {
+    const crlf = 'model = "gpt-5"\r\napproval_policy = "on-request"\r\n';
+    const line = 'notify = ["/n", "/opt/sessionpipe/dist/hook.js", "codex", "notify"]';
+    const withIt = withNotify(crlf, line);
+    expect(withIt).toBe(`${crlf}${line}\r\n`);
+    expect(readNotify(withIt)).toMatchObject({
+      other: false,
+      misplaced: false,
+      argv: ["/n", "/opt/sessionpipe/dist/hook.js", "codex", "notify"],
+    });
+    expect(withoutNotify(withIt)).toBe(crlf);
+    const table = `${crlf}\r\n[projects."/x"]\r\ntrust_level = "trusted"\r\n`;
+    const before = withNotify(table, line);
+    expect(before).toBe(`${crlf}${line}\r\n\r\n[projects."/x"]\r\ntrust_level = "trusted"\r\n`);
+    expect(withoutNotify(before)).toBe(table);
+  });
   it("a single-quoted string hides a bracket; a notify that is no array is another tool's", () => {
     expect(firstTableAt("a = '[x]'\nb = 1\n[t]\n")).toBe("a = '[x]'\nb = 1\n".length);
     expect(firstTableAt("a = 'unterminated\n[t]\n")).toBe("a = 'unterminated\n".length);
